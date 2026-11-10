@@ -19,3 +19,4 @@ kubeconfig*
 
 # Local guide output (kept outside this repo)
 *.html
+!docs/index.html

@@ -1,5 +1,7 @@
 # LLM inference on Amazon EKS GPUs behind Envoy Gateway
 
+**Step-by-step guide with diagrams, real results and screenshots:** https://patel0ankur.github.io/eks-gpu-llm-inference/
+
 Serve an open model ([Qwen2.5-0.5B-Instruct](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct)) with **vLLM** on NVIDIA A10G GPUs in Amazon EKS. A small FastAPI app sits in front, and **Envoy Gateway** (Kubernetes Gateway API) handles routing, rate limiting, retries and least-request load balancing behind an AWS Network Load Balancer.
 
 ```text
