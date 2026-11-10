@@ -1,0 +1,21 @@
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local env, kubeconfigs, secrets, rendered manifests
+.env
+*.env
+kubeconfig*
+*.pem
+*.key
+*-rendered.yaml
+
+# Local guide output (kept outside this repo)
+*.html

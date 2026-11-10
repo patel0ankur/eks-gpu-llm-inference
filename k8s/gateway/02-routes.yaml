@@ -1,0 +1,85 @@
+# App-owned routing (namespace ai), attached to the platform Gateways in namespace gateway.
+#   chat-route : public-gw (NLB) -> chat-api       + rate limit, bounded retries, timeout
+#   llm-route  : llm-gw (internal) -> vLLM Pods    + least-request, outlier ejection, circuit breaker
+# Apply with:  kubectl apply -f k8s/gateway/02-routes.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chat-route
+  namespace: ai
+spec:
+  parentRefs:
+    - {name: public-gw, namespace: gateway}
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /v1/ask}
+        - path: {type: Exact, value: /healthz}
+      backendRefs:
+        - {name: chat-api, port: 80}
+      timeouts:
+        request: 120s                    # whole request incl. LLM generation
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: chat-policy
+  namespace: ai
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: chat-route}
+  rateLimit:                             # edge protection for GPU capacity (per Envoy replica)
+    type: Local
+    local:
+      rules:
+        - limit: {requests: 20, unit: Second}
+  retry:                                 # bounded: only failures that are safe to repeat
+    numRetries: 1
+    retryOn:
+      triggers: ["connect-failure", "retriable-status-codes"]
+      httpStatusCodes: [503]             # chat-api backpressure ("busy")
+    perRetry:
+      backOff: {baseInterval: 200ms, maxInterval: 1s}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: llm-route
+  namespace: ai
+spec:
+  parentRefs:
+    - {name: llm-gw, namespace: gateway}
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /v1}
+      backendRefs:
+        - {name: llm, port: 8000}        # Envoy balances across the vLLM Pod IPs directly
+      timeouts:
+        request: 120s
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: llm-policy
+  namespace: ai
+spec:
+  targetRefs:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: llm-route}
+  loadBalancer:
+    type: LeastRequest                   # send to the vLLM replica with the fewest in-flight requests
+  healthCheck:
+    passive:                             # outlier detection: eject a replica that keeps failing
+      consecutive5XxErrors: 3
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+  circuitBreaker:                        # cap what one Envoy sends to the GPU pool
+    maxConnections: 256
+    maxPendingRequests: 128
+    maxParallelRequests: 256
+    maxParallelRetries: 8
+  retry:
+    numRetries: 1
+    retryOn:
+      triggers: ["connect-failure", "reset"]
+    perRetry:
+      backOff: {baseInterval: 100ms, maxInterval: 1s}

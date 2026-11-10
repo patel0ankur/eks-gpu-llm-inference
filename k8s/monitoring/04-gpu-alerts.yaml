@@ -1,0 +1,65 @@
+# GPU alert rules, evaluated by Prometheus and sent to Alertmanager.
+# Metric names are DCGM Exporter 4.9 (unit-suffixed). Thresholds fit an A10G running vLLM.
+# Apply with:  kubectl apply -f k8s/monitoring/04-gpu-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gpu-alerts
+  namespace: monitoring
+  labels: {release: monitoring}
+spec:
+  groups:
+    - name: gpu.rules
+      rules:
+        # --- the monitoring itself -------------------------------------------------
+        - alert: GPUExporterDown
+          expr: up{job="dcgm-exporter"} == 0
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "DCGM exporter on {{ $labels.node }} can't be scraped"
+            description: "No GPU metrics from {{ $labels.node }} for 5 minutes: GPU problems there are invisible."
+
+        # --- heat and memory ---------------------------------------------------------
+        - alert: GPUHighTemperature
+          expr: max by (node, gpu) (DCGM_FI_DEV_GPU_TEMP_CELSIUS) > 80
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "GPU {{ $labels.gpu }} on {{ $labels.node }} is {{ $value }} °C"
+            description: "Above 80 °C for 5 minutes; the GPU may slow its clocks to cool down."
+
+        - alert: GPUMemoryPressure
+          # vLLM reserves ~85% at start-up, so 85% is normal here. Above 95% means something
+          # else is using the GPU or the reservation was raised.
+          expr: 100 * DCGM_FI_DEV_FB_USED_BYTES / DCGM_FI_DEV_FB_CAPACITY_BYTES > 95
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "GPU memory {{ $value | humanize }}% on {{ $labels.node }} ({{ $labels.pod }})"
+            description: "Above 95% for 10 minutes; new requests or Pods may fail with out-of-memory."
+
+        # --- hardware health (replaces ECC alerts; this exporter has no ECC counters) -
+        - alert: GPURowRemapFailed
+          expr: DCGM_FI_DEV_ROW_REMAP_FAILED > 0
+          for: 1m
+          labels: {severity: critical}
+          annotations:
+            summary: "GPU {{ $labels.gpu }} on {{ $labels.node }} couldn't remap a bad memory row"
+            description: "Memory hardware fault. Drain the node and replace the instance."
+
+        - alert: GPUUncorrectableMemoryErrors
+          expr: increase(DCGM_FI_DEV_ROW_REMAP_UNCORRECTABLE_TOTAL[15m]) > 0
+          labels: {severity: critical}
+          annotations:
+            summary: "Uncorrectable memory errors on GPU {{ $labels.gpu }} ({{ $labels.node }})"
+            description: "Rows were remapped after uncorrectable errors in the last 15 minutes; results may be wrong."
+
+        # --- cost --------------------------------------------------------------------
+        - alert: GPUIdle
+          expr: max_over_time(DCGM_FI_DEV_GPU_UTIL_RATIO[1h]) == 0
+          for: 1h
+          labels: {severity: info}
+          annotations:
+            summary: "GPU on {{ $labels.node }} has been idle for 2 hours"
+            description: "No GPU work for 2 hours (~$1/hour per g5.xlarge). Scale the GPU node group down if it's not needed."

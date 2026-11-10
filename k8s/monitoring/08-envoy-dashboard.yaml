@@ -1,0 +1,933 @@
+# Grafana dashboard "Gateways: Envoy": traffic, status codes, client latency, backend health and
+# the protection features (retries, outlier ejection, circuit breaker) of public-gw and llm-gw.
+# Apply with:  kubectl apply -f k8s/monitoring/08-envoy-dashboard.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: envoy-gateways-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  envoy-gateways.json: |
+    {
+     "uid": "envoy-gateways",
+     "title": "Gateways: Envoy",
+     "tags": [
+      "envoy",
+      "gateway-api",
+      "eks"
+     ],
+     "timezone": "browser",
+     "schemaVersion": 39,
+     "version": 1,
+     "refresh": "15s",
+     "time": {
+      "from": "now-1h",
+      "to": "now"
+     },
+     "links": [
+      {
+       "title": "Workload: vLLM on each GPU",
+       "type": "link",
+       "url": "/d/vllm-workload",
+       "icon": "dashboard"
+      },
+      {
+       "title": "GPU / NVIDIA DCGM (A10G)",
+       "type": "link",
+       "url": "/d/gpu-dcgm",
+       "icon": "dashboard"
+      }
+     ],
+     "templating": {
+      "list": [
+       {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+         "text": "Prometheus",
+         "value": "prometheus"
+        },
+        "label": "Data source"
+       },
+       {
+        "name": "gateway",
+        "type": "query",
+        "label": "Gateway",
+        "datasource": {
+         "type": "prometheus",
+         "uid": "${datasource}"
+        },
+        "query": {
+         "query": "label_values(envoy_server_live, gateway)",
+         "refId": "gw"
+        },
+        "definition": "label_values(envoy_server_live, gateway)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+         "text": [
+          "All"
+         ],
+         "value": [
+          "$__all"
+         ]
+        }
+       }
+      ]
+     },
+     "panels": [
+      {
+       "id": 1,
+       "type": "stat",
+       "title": "Envoy Pods live",
+       "description": "2 per gateway",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "none",
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green",
+            "value": null
+           }
+          ]
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "count(envoy_server_live{gateway=~\"$gateway\"} == 1)"
+        }
+       ]
+      },
+      {
+       "id": 2,
+       "type": "stat",
+       "title": "Served/s (2xx)",
+       "description": "",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "reqps",
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green",
+            "value": null
+           }
+          ]
+         },
+         "decimals": 1
+        },
+        "overrides": []
+       },
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum(rate(envoy_http_downstream_rq_xx{gateway=\"public-gw\",envoy_http_conn_manager_prefix=\"http-10080\",envoy_response_code_class=\"2\"}[1m]))"
+        }
+       ]
+      },
+      {
+       "id": 3,
+       "type": "stat",
+       "title": "Rate-limited/s (429)",
+       "description": "Refused at the edge before reaching chat-api",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "reqps",
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green",
+            "value": null
+           },
+           {
+            "color": "orange",
+            "value": 1
+           },
+           {
+            "color": "red",
+            "value": 50
+           }
+          ]
+         },
+         "decimals": 1
+        },
+        "overrides": []
+       },
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum(rate(envoy_http_local_rate_limit_rate_limited{gateway=\"public-gw\"}[1m]))"
+        }
+       ]
+      },
+      {
+       "id": 4,
+       "type": "stat",
+       "title": "Client p95",
+       "description": "Forwarded requests only",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 4
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "s",
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green",
+            "value": null
+           },
+           {
+            "color": "orange",
+            "value": 1
+           },
+           {
+            "color": "red",
+            "value": 3
+           }
+          ]
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "histogram_quantile(0.95, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{gateway=\"public-gw\",envoy_cluster_name=~\"httproute/ai/chat-route.*\"}[1m]))) / 1000"
+        }
+       ]
+      },
+      {
+       "id": 5,
+       "type": "stat",
+       "title": "Healthy vLLM backends",
+       "description": "Endpoints llm-gw can send to; drops when outlier detection ejects one",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "none",
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green",
+            "value": null
+           }
+          ]
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "min(envoy_cluster_membership_healthy{gateway=\"llm-gw\",envoy_cluster_name=~\"httproute/ai/llm-route.*\"})"
+        }
+       ]
+      },
+      {
+       "id": 6,
+       "type": "stat",
+       "title": "Retries/min",
+       "description": "",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short",
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green",
+            "value": null
+           },
+           {
+            "color": "orange",
+            "value": 1
+           },
+           {
+            "color": "red",
+            "value": 10
+           }
+          ]
+         },
+         "decimals": 1
+        },
+        "overrides": []
+       },
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum(rate(envoy_cluster_upstream_rq_retry{envoy_cluster_name=~\"httproute.*\"}[5m])) * 60"
+        }
+       ]
+      },
+      {
+       "id": 100,
+       "type": "row",
+       "title": "Traffic: what clients see (public-gw)",
+       "collapsed": false,
+       "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 1
+       },
+       "panels": []
+      },
+      {
+       "id": 7,
+       "type": "timeseries",
+       "title": "Responses/s by status",
+       "description": "2xx served, 4xx includes 429 from the edge rate limit, 5xx includes 503 backpressure from chat-api.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 8,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "reqps",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum by (envoy_response_code_class) (rate(envoy_http_downstream_rq_xx{gateway=\"public-gw\",envoy_http_conn_manager_prefix=\"http-10080\"}[1m]))",
+         "legendFormat": "{{envoy_response_code_class}}xx"
+        },
+        {
+         "refId": "B",
+         "expr": "sum(rate(envoy_http_local_rate_limit_rate_limited{gateway=\"public-gw\"}[1m]))",
+         "legendFormat": "of which rate-limited (429)"
+        }
+       ]
+      },
+      {
+       "id": 8,
+       "type": "timeseries",
+       "title": "Client latency p50 / p95 / p99",
+       "description": "Requests forwarded to chat-api (429s excluded). Estimated from Envoy's latency buckets.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 8,
+        "y": 5,
+        "w": 8,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "s",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "histogram_quantile(0.5, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{gateway=\"public-gw\",envoy_cluster_name=~\"httproute/ai/chat-route.*\"}[1m]))) / 1000",
+         "legendFormat": "p50"
+        },
+        {
+         "refId": "B",
+         "expr": "histogram_quantile(0.95, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{gateway=\"public-gw\",envoy_cluster_name=~\"httproute/ai/chat-route.*\"}[1m]))) / 1000",
+         "legendFormat": "p95"
+        },
+        {
+         "refId": "C",
+         "expr": "histogram_quantile(0.99, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{gateway=\"public-gw\",envoy_cluster_name=~\"httproute/ai/chat-route.*\"}[1m]))) / 1000",
+         "legendFormat": "p99"
+        }
+       ]
+      },
+      {
+       "id": 9,
+       "type": "timeseries",
+       "title": "Open client connections",
+       "description": "",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 16,
+        "y": 5,
+        "w": 8,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum by (gateway) (envoy_http_downstream_cx_active{gateway=~\"$gateway\",envoy_http_conn_manager_prefix=\"http-10080\"})",
+         "legendFormat": "{{gateway}}"
+        }
+       ]
+      },
+      {
+       "id": 101,
+       "type": "row",
+       "title": "Inside: chat-api \u2192 vLLM (llm-gw)",
+       "collapsed": false,
+       "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 1
+       },
+       "panels": []
+      },
+      {
+       "id": 10,
+       "type": "timeseries",
+       "title": "Requests/s per Envoy Pod",
+       "description": "Each gateway runs 2 Envoy Pods; the load should be shared.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 8,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "reqps",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum by (gateway, pod) (rate(envoy_cluster_upstream_rq_total{envoy_cluster_name=~\"httproute.*\",gateway=~\"$gateway\"}[1m]))",
+         "legendFormat": "{{gateway}} \u00b7 {{pod}}"
+        }
+       ]
+      },
+      {
+       "id": 11,
+       "type": "timeseries",
+       "title": "Healthy backends",
+       "description": "public-gw \u2192 chat-api Pods, llm-gw \u2192 vLLM Pods.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 8,
+        "y": 14,
+        "w": 8,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "min by (gateway, envoy_cluster_name) (envoy_cluster_membership_healthy{envoy_cluster_name=~\"httproute.*\",gateway=~\"$gateway\"})",
+         "legendFormat": "{{gateway}} healthy"
+        },
+        {
+         "refId": "B",
+         "expr": "max by (gateway, envoy_cluster_name) (envoy_cluster_membership_total{envoy_cluster_name=~\"httproute.*\",gateway=~\"$gateway\"})",
+         "legendFormat": "{{gateway}} total"
+        }
+       ]
+      },
+      {
+       "id": 12,
+       "type": "timeseries",
+       "title": "Average latency at each hop",
+       "description": "Exact averages (sum \u00f7 count). The gap between lines is what each layer adds.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 16,
+        "y": 14,
+        "w": 8,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "s",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum(rate(envoy_cluster_upstream_rq_time_sum{gateway=\"public-gw\",envoy_cluster_name=~\"httproute/ai/chat-route.*\"}[1m])) / sum(rate(envoy_cluster_upstream_rq_time_count{gateway=\"public-gw\",envoy_cluster_name=~\"httproute/ai/chat-route.*\"}[1m])) / 1000",
+         "legendFormat": "public-gw \u2192 chat-api"
+        },
+        {
+         "refId": "B",
+         "expr": "sum(rate(envoy_cluster_upstream_rq_time_sum{gateway=\"llm-gw\",envoy_cluster_name=~\"httproute/ai/llm-route.*\"}[1m])) / sum(rate(envoy_cluster_upstream_rq_time_count{gateway=\"llm-gw\",envoy_cluster_name=~\"httproute/ai/llm-route.*\"}[1m])) / 1000",
+         "legendFormat": "llm-gw \u2192 vLLM"
+        },
+        {
+         "refId": "C",
+         "expr": "sum(rate(vllm:e2e_request_latency_seconds_sum[1m])) / sum(rate(vllm:e2e_request_latency_seconds_count[1m]))",
+         "legendFormat": "inside vLLM"
+        }
+       ]
+      },
+      {
+       "id": 102,
+       "type": "row",
+       "title": "Protection: retries, ejections, circuit breaker",
+       "collapsed": false,
+       "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 24,
+        "h": 1
+       },
+       "panels": []
+      },
+      {
+       "id": 13,
+       "type": "timeseries",
+       "title": "Retries/min",
+       "description": "public-gw retries a 503 once; llm-gw retries connect failures and resets once.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 6,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum by (gateway) (rate(envoy_cluster_upstream_rq_retry{envoy_cluster_name=~\"httproute.*\",gateway=~\"$gateway\"}[5m])) * 60",
+         "legendFormat": "{{gateway}}"
+        }
+       ]
+      },
+      {
+       "id": 14,
+       "type": "timeseries",
+       "title": "Outlier ejections active",
+       "description": "Backends removed after 3 consecutive 5xx (llm-policy).",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 6,
+        "y": 23,
+        "w": 6,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum by (gateway) (envoy_cluster_outlier_detection_ejections_active{envoy_cluster_name=~\"httproute.*\",gateway=~\"$gateway\"})",
+         "legendFormat": "{{gateway}}"
+        }
+       ]
+      },
+      {
+       "id": 15,
+       "type": "timeseries",
+       "title": "Circuit-breaker overflow/min",
+       "description": "Requests refused because a circuit-breaker limit was hit.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 12,
+        "y": 23,
+        "w": 6,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum by (gateway) (rate(envoy_cluster_upstream_rq_pending_overflow{envoy_cluster_name=~\"httproute.*\",gateway=~\"$gateway\"}[5m])) * 60",
+         "legendFormat": "{{gateway}}"
+        }
+       ]
+      },
+      {
+       "id": 16,
+       "type": "timeseries",
+       "title": "Upstream timeouts/min",
+       "description": "Requests that hit the 120 s route timeout.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 18,
+        "y": 23,
+        "w": 6,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "short",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum by (gateway) (rate(envoy_cluster_upstream_rq_timeout{envoy_cluster_name=~\"httproute.*\",gateway=~\"$gateway\"}[5m])) * 60",
+         "legendFormat": "{{gateway}}"
+        }
+       ]
+      }
+     ]
+    }

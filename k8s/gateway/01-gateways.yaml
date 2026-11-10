@@ -1,0 +1,102 @@
+# Gateway API infrastructure (platform-owned): one GatewayClass, two Envoy fleets.
+#   public-gw : Envoy behind an internet-facing NLB (L4), restricted to one source IP
+#   llm-gw    : Envoy on ClusterIP only, used by chat-api to reach vLLM
+# Render with:  envsubst '${MY_CIDR}' < k8s/gateway/01-gateways.yaml | kubectl apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+# How the PUBLIC Envoy Pods are deployed and exposed.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: public-proxy
+  namespace: gateway
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 2                                   # survive one Envoy Pod/node loss
+        pod:
+          nodeSelector: {workload: system}
+        container:
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+      envoyService:
+        name: public-gw                               # stable Service name
+        type: LoadBalancer
+        loadBalancerClass: service.k8s.aws/nlb        # handled by the AWS Load Balancer Controller
+        loadBalancerSourceRanges: ["${MY_CIDR}"]      # only your IP can reach the NLB
+        annotations:
+          service.beta.kubernetes.io/aws-load-balancer-type: external
+          service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip          # targets = Envoy Pod IPs
+          service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+          service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+---
+# How the INTERNAL Envoy Pods are deployed: never exposed outside the cluster.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: internal-proxy
+  namespace: gateway
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        replicas: 2
+        pod:
+          nodeSelector: {workload: system}
+        container:
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+      envoyService:
+        name: llm-gw                                  # llm-gw.envoy-gateway-system.svc.cluster.local
+        type: ClusterIP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: public-gw
+  namespace: gateway
+spec:
+  gatewayClassName: envoy
+  infrastructure:
+    parametersRef: {group: gateway.envoyproxy.io, kind: EnvoyProxy, name: public-proxy}
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:                                  # only app teams in namespace "ai" may attach routes
+        namespaces:
+          from: Selector
+          selector: {matchLabels: {kubernetes.io/metadata.name: ai}}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: llm-gw
+  namespace: gateway
+spec:
+  gatewayClassName: envoy
+  infrastructure:
+    parametersRef: {group: gateway.envoyproxy.io, kind: EnvoyProxy, name: internal-proxy}
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector: {matchLabels: {kubernetes.io/metadata.name: ai}}

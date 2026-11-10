@@ -1,0 +1,660 @@
+# Grafana dashboard "GPU / NVIDIA DCGM (A10G)", loaded by the Grafana dashboard sidecar.
+# The sidecar watches every namespace for ConfigMaps labelled grafana_dashboard: "1".
+# Apply with:  kubectl apply -f k8s/monitoring/03-gpu-dashboard.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-dcgm-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  gpu-dcgm.json: |
+    {
+     "uid": "gpu-dcgm",
+     "title": "GPU / NVIDIA DCGM (A10G)",
+     "tags": [
+      "gpu",
+      "dcgm",
+      "eks"
+     ],
+     "timezone": "browser",
+     "schemaVersion": 39,
+     "version": 1,
+     "refresh": "15s",
+     "time": {
+      "from": "now-1h",
+      "to": "now"
+     },
+     "templating": {
+      "list": [
+       {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+         "text": "Prometheus",
+         "value": "prometheus"
+        },
+        "hide": 0,
+        "label": "Data source"
+       },
+       {
+        "name": "node",
+        "type": "query",
+        "label": "GPU node",
+        "datasource": {
+         "type": "prometheus",
+         "uid": "${datasource}"
+        },
+        "query": {
+         "query": "label_values(DCGM_FI_DEV_GPU_UTIL_RATIO, node)",
+         "refId": "node"
+        },
+        "definition": "label_values(DCGM_FI_DEV_GPU_UTIL_RATIO, node)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+         "text": [
+          "All"
+         ],
+         "value": [
+          "$__all"
+         ]
+        }
+       }
+      ]
+     },
+     "panels": [
+      {
+       "id": 1,
+       "type": "stat",
+       "title": "GPUs reporting",
+       "description": "Number of GPUs with a live DCGM exporter",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "none",
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green",
+            "value": null
+           }
+          ]
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "count(DCGM_FI_DEV_GPU_UTIL_RATIO{node=~\"$node\"})",
+         "instant": false
+        }
+       ]
+      },
+      {
+       "id": 2,
+       "type": "stat",
+       "title": "Avg GPU utilization",
+       "description": "",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "percent",
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green",
+            "value": null
+           },
+           {
+            "color": "orange",
+            "value": 70
+           },
+           {
+            "color": "red",
+            "value": 90
+           }
+          ]
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "avg(DCGM_FI_DEV_GPU_UTIL_RATIO{node=~\"$node\"}) * 100",
+         "instant": false
+        }
+       ]
+      },
+      {
+       "id": 3,
+       "type": "stat",
+       "title": "Avg Tensor Core activity",
+       "description": "The real compute signal for LLMs",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "percent",
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green",
+            "value": null
+           }
+          ]
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "avg(DCGM_FI_PROF_TENSOR_UTIL_RATIO{node=~\"$node\"}) * 100",
+         "instant": false
+        }
+       ]
+      },
+      {
+       "id": 4,
+       "type": "stat",
+       "title": "Max GPU temperature",
+       "description": "",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "celsius",
+         "thresholds": {
+          "mode": "absolute",
+          "steps": [
+           {
+            "color": "green",
+            "value": null
+           },
+           {
+            "color": "orange",
+            "value": 75
+           },
+           {
+            "color": "red",
+            "value": 85
+           }
+          ]
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "reduceOptions": {
+         "calcs": [
+          "lastNotNull"
+         ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "max(DCGM_FI_DEV_GPU_TEMP_CELSIUS{node=~\"$node\"})",
+         "instant": false
+        }
+       ]
+      },
+      {
+       "id": 5,
+       "type": "timeseries",
+       "title": "GPU utilization %",
+       "description": "Share of time any kernel ran. 100% does not mean full.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "percent",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         },
+         "max": 100
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "avg by (node) (DCGM_FI_DEV_GPU_UTIL_RATIO{node=~\"$node\"}) * 100",
+         "legendFormat": "{{node}}"
+        }
+       ]
+      },
+      {
+       "id": 6,
+       "type": "timeseries",
+       "title": "Tensor Core activity %",
+       "description": "How much of the matrix-maths hardware is working.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "percent",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         },
+         "max": 100
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "avg by (node) (DCGM_FI_PROF_TENSOR_UTIL_RATIO{node=~\"$node\"}) * 100",
+         "legendFormat": "{{node}}"
+        }
+       ]
+      },
+      {
+       "id": 7,
+       "type": "timeseries",
+       "title": "GPU memory used %",
+       "description": "vLLM reserves ~85% at start-up (weights + KV cache).",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "percent",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         },
+         "max": 100
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "100 * DCGM_FI_DEV_FB_USED_BYTES{node=~\"$node\"} / DCGM_FI_DEV_FB_CAPACITY_BYTES{node=~\"$node\"}",
+         "legendFormat": "{{node}} \u00b7 {{pod}}"
+        }
+       ]
+      },
+      {
+       "id": 8,
+       "type": "timeseries",
+       "title": "GPU memory by Pod",
+       "description": "Which workload holds the GPU memory.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "bytes",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "sum by (namespace, pod) (DCGM_FI_DEV_FB_USED_BYTES{node=~\"$node\"})",
+         "legendFormat": "{{namespace}}/{{pod}}"
+        }
+       ]
+      },
+      {
+       "id": 9,
+       "type": "timeseries",
+       "title": "Temperature \u00b0C",
+       "description": "",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 12,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "celsius",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "max by (node) (DCGM_FI_DEV_GPU_TEMP_CELSIUS{node=~\"$node\"})",
+         "legendFormat": "{{node}}"
+        }
+       ]
+      },
+      {
+       "id": 10,
+       "type": "timeseries",
+       "title": "Power W",
+       "description": "A10G limit: 300 W.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 12,
+        "y": 20,
+        "w": 12,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "watt",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "avg by (node) (DCGM_FI_DEV_BOARD_POWER_WATTS{node=~\"$node\"})",
+         "legendFormat": "{{node}}"
+        }
+       ]
+      },
+      {
+       "id": 11,
+       "type": "timeseries",
+       "title": "Memory bandwidth activity %",
+       "description": "LLM decoding is usually limited by this, not by Tensor Cores.",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "percent",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         },
+         "max": 100
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "avg by (node) (DCGM_FI_PROF_DRAM_UTIL_RATIO{node=~\"$node\"}) * 100",
+         "legendFormat": "{{node}}"
+        }
+       ]
+      },
+      {
+       "id": 12,
+       "type": "timeseries",
+       "title": "SM clock",
+       "description": "",
+       "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+       },
+       "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 8
+       },
+       "fieldConfig": {
+        "defaults": {
+         "unit": "hertz",
+         "min": 0,
+         "custom": {
+          "lineWidth": 2,
+          "fillOpacity": 10
+         }
+        },
+        "overrides": []
+       },
+       "options": {
+        "legend": {
+         "displayMode": "table",
+         "placement": "bottom",
+         "calcs": [
+          "lastNotNull",
+          "max"
+         ]
+        },
+        "tooltip": {
+         "mode": "multi"
+        }
+       },
+       "targets": [
+        {
+         "refId": "A",
+         "expr": "avg by (node) (DCGM_FI_DEV_SM_CLOCK_HERTZ{node=~\"$node\"})",
+         "legendFormat": "{{node}}"
+        }
+       ]
+      }
+     ]
+    }

@@ -1,0 +1,75 @@
+# AI app tier: chat-api on the CPU system nodes, calling the GPU LLM over the cluster network.
+# Render with:  envsubst '${APP_IMAGE}' < k8s/gpu/02-chat-app.yaml | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-api
+  namespace: ai
+  labels: {app: chat-api}
+spec:
+  replicas: 2                                  # survive one Pod/node loss
+  selector:
+    matchLabels: {app: chat-api}
+  template:
+    metadata:
+      labels: {app: chat-api}
+    spec:
+      nodeSelector: {workload: system}         # CPU nodes; keep the GPU node for the model
+      topologySpreadConstraints:               # one replica per node/AZ where possible
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: {matchLabels: {app: chat-api}}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: api
+          image: ${APP_IMAGE}   # rendered by envsubst, e.g. <account>.dkr.ecr.<region>.amazonaws.com/chat-api:v1
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - {name: LLM_BASE_URL, value: "http://llm-gw.envoy-gateway-system.svc.cluster.local/v1"}   # via internal Envoy (llm-gw)
+            - {name: LLM_MODEL, value: qwen2.5-0.5b-instruct}
+            - name: LLM_API_KEY
+              valueFrom: {secretKeyRef: {name: llm-api-key, key: key}}
+            - {name: LLM_TIMEOUT_S, value: "60"}
+            - {name: MAX_CONCURRENCY, value: "32"}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}   # the app is light; the GPU does the heavy work
+            limits: {memory: 256Mi}
+          readinessProbe:                      # ready only when the LLM answers /v1/models
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:                       # restart only if the app itself hangs
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-api
+  namespace: ai
+spec:
+  type: ClusterIP                              # internal only: chat-api.ai.svc.cluster.local
+  selector: {app: chat-api}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: chat-api
+  namespace: ai
+spec:
+  minAvailable: 1                              # node drains never remove both replicas
+  selector:
+    matchLabels: {app: chat-api}

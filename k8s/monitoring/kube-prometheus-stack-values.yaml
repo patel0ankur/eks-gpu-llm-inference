@@ -1,0 +1,51 @@
+# kube-prometheus-stack 93.1.1: Prometheus, Grafana, Alertmanager, Prometheus Operator,
+# kube-state-metrics and node-exporter.
+#   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack --version 93.1.1 \
+#     -n monitoring -f k8s/monitoring/kube-prometheus-stack-values.yaml --wait
+# Everything stays ClusterIP; open the UIs with kubectl port-forward on 127.0.0.1.
+
+# EKS manages the control plane: these endpoints can't be scraped, so their targets and
+# alerts would only ever show "down".
+kubeControllerManager: {enabled: false}
+kubeScheduler: {enabled: false}
+kubeEtcd: {enabled: false}
+kubeProxy: {enabled: false}          # EKS kube-proxy serves metrics on 127.0.0.1 only
+
+prometheusOperator:
+  nodeSelector: {workload: system}
+  admissionWebhooks:
+    patch:
+      nodeSelector: {workload: system}
+
+prometheus:
+  prometheusSpec:
+    nodeSelector: {workload: system}
+    retention: 7d
+    resources:
+      requests: {cpu: 200m, memory: 1Gi}
+      limits: {memory: 2Gi}
+    # Pick up ServiceMonitors / PodMonitors / PrometheusRules from any namespace,
+    # not only those carrying this Helm release's label.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+alertmanager:
+  alertmanagerSpec:
+    nodeSelector: {workload: system}
+    resources:
+      requests: {cpu: 20m, memory: 64Mi}
+
+grafana:
+  nodeSelector: {workload: system}
+  service: {type: ClusterIP}
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+
+kube-state-metrics:
+  nodeSelector: {workload: system}
+
+# node-exporter is a DaemonSet: it must also run on the tainted GPU nodes.
+prometheus-node-exporter:
+  tolerations:
+    - {operator: Exists}

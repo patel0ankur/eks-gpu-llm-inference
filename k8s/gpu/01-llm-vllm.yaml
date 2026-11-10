@@ -1,0 +1,74 @@
+# LLM server: vLLM serving Qwen2.5-0.5B-Instruct on one NVIDIA GPU.
+# Reachable only inside the cluster (ClusterIP) and only with the API key in Secret llm-api-key.
+# Apply with:  kubectl apply -f k8s/gpu/01-llm-vllm.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm
+  namespace: ai
+  labels: {app: llm}
+spec:
+  replicas: 2                      # 2 GPU nodes -> 2 replicas (1 GPU each)
+  strategy:
+    type: Recreate                 # a rolling update would need a 2nd GPU; replace in place instead
+  selector:
+    matchLabels: {app: llm}
+  template:
+    metadata:
+      labels: {app: llm}
+    spec:
+      nodeSelector: {workload: gpu}            # run on the GPU node group
+      tolerations:                             # GPU nodes are tainted; only GPU workloads tolerate it
+        - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.32.0      # pinned release, not "latest"
+          command: ["vllm", "serve"]
+          args:
+            - Qwen/Qwen2.5-0.5B-Instruct       # Hugging Face model ID (open, no token needed)
+            - --served-model-name=qwen2.5-0.5b-instruct
+            - --host=0.0.0.0                   # Pod network only; exposure is the ClusterIP Service
+            - --port=8000
+            - --max-model-len=4096             # max prompt + answer tokens per request
+            - --gpu-memory-utilization=0.85    # weights + KV cache may use 85% of the 24 GB
+          env:
+            - name: VLLM_API_KEY               # vLLM's built-in API-key check on /v1/* routes
+              valueFrom: {secretKeyRef: {name: llm-api-key, key: key}}
+            - {name: HF_HOME, value: /models}  # where model weights are downloaded
+          ports:
+            - {name: http, containerPort: 8000}
+          resources:
+            requests: {cpu: "3", memory: 10Gi}
+            limits: {nvidia.com/gpu: 1, memory: 13Gi}   # 1 whole GPU, exclusive to this Pod
+          startupProbe:                        # first start: download weights + load to GPU
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 60               # allow up to 10 minutes
+          readinessProbe:                      # only send traffic once the model is loaded
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:                       # restart if the server hangs
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            failureThreshold: 3
+          volumeMounts:
+            - {name: models, mountPath: /models}
+            - {name: dshm, mountPath: /dev/shm}
+      volumes:
+        - name: models
+          emptyDir: {sizeLimit: 20Gi}          # re-downloaded if the Pod moves; use EFS/S3/FSx to persist
+        - name: dshm
+          emptyDir: {medium: Memory, sizeLimit: 2Gi}   # shared memory used by PyTorch/NCCL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm
+  namespace: ai
+spec:
+  type: ClusterIP                  # internal only: llm.ai.svc.cluster.local:8000
+  selector: {app: llm}
+  ports:
+    - {name: http, port: 8000, targetPort: http}

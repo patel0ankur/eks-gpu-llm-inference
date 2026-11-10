@@ -1,0 +1,67 @@
+# NVIDIA DCGM Exporter: one Pod per GPU node, GPU telemetry in Prometheus format on :9400/metrics.
+# Apply with:  kubectl apply -f k8s/monitoring/01-dcgm-exporter.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels: {app: dcgm-exporter}
+spec:
+  selector:
+    matchLabels: {app: dcgm-exporter}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 1}
+  template:
+    metadata:
+      labels: {app: dcgm-exporter}
+    spec:
+      nodeSelector: {workload: gpu}               # GPU nodes only (label set by CloudFormation)
+      tolerations:
+        - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}   # the GPU node taint
+      priorityClassName: system-node-critical     # monitoring shouldn't be evicted first
+      automountServiceAccountToken: false         # it never calls the Kubernetes API
+      containers:
+        - name: exporter
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:4.7.0-4.9.0   # <DCGM>-<exporter>, pinned
+          ports:
+            - {name: metrics, containerPort: 9400}
+          env:
+            - {name: DCGM_EXPORTER_KUBERNETES, value: "true"}   # add namespace/pod/container labels
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+          securityContext:                        # same as NVIDIA's Helm chart: not privileged,
+            runAsUser: 0                          # only SYS_ADMIN for DCGM profiling counters
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL], add: [SYS_ADMIN]}
+          volumeMounts:
+            - {name: pod-resources, mountPath: /var/lib/kubelet/pod-resources, readOnly: true}
+          startupProbe:
+            httpGet: {path: /health, port: 9400}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /health, port: 9400}
+          livenessProbe:
+            httpGet: {path: /health, port: 9400}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+      volumes:
+        # kubelet's pod-resources API: which Pod holds which GPU (for per-Pod GPU metrics)
+        - name: pod-resources
+          hostPath: {path: /var/lib/kubelet/pod-resources, type: Directory}
+---
+# Headless Service: one endpoint per exporter Pod, so Prometheus scrapes each GPU node separately.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels: {app: dcgm-exporter}
+spec:
+  clusterIP: None
+  selector: {app: dcgm-exporter}
+  ports:
+    - {name: metrics, port: 9400, targetPort: metrics}

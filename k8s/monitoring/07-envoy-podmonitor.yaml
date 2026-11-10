@@ -1,0 +1,23 @@
+# Scrape the Envoy proxies of both Gateways (public-gw and llm-gw): request rates, response codes
+# and latency as seen at each hop. Envoy Gateway exposes them on the container port named "metrics".
+# Apply with:  kubectl apply -f k8s/monitoring/07-envoy-podmonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: envoy-gateways
+  namespace: monitoring
+  labels: {release: monitoring}
+spec:
+  namespaceSelector:
+    matchNames: [envoy-gateway-system]
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: proxy
+      app.kubernetes.io/managed-by: envoy-gateway
+  podMetricsEndpoints:
+    - port: metrics                    # 19001
+      path: /stats/prometheus
+      interval: 15s
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_label_gateway_envoyproxy_io_owning_gateway_name]
+          targetLabel: gateway         # public-gw or llm-gw

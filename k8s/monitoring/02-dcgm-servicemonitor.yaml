@@ -1,0 +1,25 @@
+# Tells Prometheus (through the Prometheus Operator) to scrape every DCGM Exporter Pod.
+# Apply with:  kubectl apply -f k8s/monitoring/02-dcgm-servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dcgm-exporter
+  namespace: monitoring
+  labels:
+    app: dcgm-exporter
+    release: monitoring          # not required with our values (any ServiceMonitor is selected), kept for the chart default
+spec:
+  selector:
+    matchLabels: {app: dcgm-exporter}       # the headless Service from 01-dcgm-exporter.yaml
+  namespaceSelector:
+    matchNames: [monitoring]
+  endpoints:
+    - port: metrics                         # Service port *name*, not number
+      path: /metrics
+      interval: 15s
+      # DCGM puts the GPU *workload's* namespace/pod/container on each series (e.g. pod="llm-...").
+      # honorLabels keeps those instead of renaming them to exported_pod etc.
+      honorLabels: true
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node                 # which GPU node the series came from

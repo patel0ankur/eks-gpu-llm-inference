@@ -1,0 +1,21 @@
+# Scrape vLLM's own metrics (queue, KV cache, tokens, latency) from every vLLM Pod.
+# PodMonitor selects Pods directly, so the llm Service needs no extra labels.
+# Apply with:  kubectl apply -f k8s/monitoring/05-vllm-podmonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: vllm
+  namespace: monitoring
+  labels: {release: monitoring}
+spec:
+  namespaceSelector:
+    matchNames: [ai]
+  selector:
+    matchLabels: {app: llm}          # the vLLM Deployment's Pods
+  podMetricsEndpoints:
+    - port: http                     # container port name (8000)
+      path: /metrics                 # served without the API key; ClusterIP only
+      interval: 15s
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node          # same label as the DCGM series, so GPU and vLLM metrics join
